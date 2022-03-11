@@ -30,4 +30,10 @@ function h = playVideo(vid, fr, colormap, rangeMin, rangeMax)
     h.Visual.ColorMap.UserRangeMin = rangeMin;
     h.Visual.ColorMap.UserRangeMax = rangeMax;
     h.Visual.ColorMap.MapExpression = colormap;
+    
+%     set(0,'showHiddenHandles','on')
+%     handle = gcf ;  
+%     handle.findobj % to view all the linked objects with the vision.VideoPlayer
+%     ftw = handle.findobj ('TooltipString', 'Maintain fit to window');   % this will search the object in the figure which has the respective 'TooltipString' parameter.
+%     ftw.ClickedCallback()  % execute the callback linked with this object
 end

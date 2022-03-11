@@ -69,6 +69,46 @@ classdef DMD < handle
             Atilde = Ur' * Y * Vr / Sr;
         end
         
+        function P = getP(obj, X)
+            P = pinv(X * X');
+%             [U,S,V] = svd(X * X','econ');
+%             P = V * diag(1/diag(S)) * U';
+        end
+        
+        function [Anext, Pnext] = updateKoopman(obj, A, P, Xnext, Ynext, w)
+            gamma = 1 / (1 + Xnext' * P * Xnext);
+            Pnext = (1 / w) * P - gamma * P * (Xnext * Xnext') * P;
+            Anext = A + gamma * (Ynext - A * Xnext) * Xnext' * P;
+        end
+        
+        function [Anext, Unext, Snext, Vnext] = updateKoopmanSVD(obj, A, X, Y, Xnext, Ynext, U, S, V)
+            % We start with UXk, SXk, VXk
+            % X큝 = Xnew(:,1:end-1);
+            % We can then calculate UX큝, SX큝, VX큝
+            % Xk+1 = Xnew;
+            z = [1, zeros(1, size(V,1) - 1)];
+            
+            % Step window forward
+            Xnew = [X(:,2:end), Xnext];
+            Ynew = [Y(:,2:end), Ynext];
+            
+            temp1 = S - U' * X(:,1) * z * V';
+            [Utemp1,Stemp1,Vtemp1] = svd(temp1,'econ'); % Utemp = Us큝; Stemp = Ss큝; Vtemp = Vs큝; 
+            
+            Upres = U * Utemp1; % Upres = UX큝;
+            Spres = Stemp1; % Spres = SX큝;
+            Vpres = V(:,2:end)' * Vtemp1'; % Vpres = VX큝; %wrong
+            
+            temp2 = [Spres, Upres' * Xnew];
+            [Utemp2, Stemp2, Vtemp2] = svd(temp2, 'econ');
+            
+            Unext = Upres * Utemp2;
+            Snext = Stemp2;
+            Vnext = [Vpres' * Vtemp2(:,1:end-1)'; Vtemp2(:,end)']; % wrong
+            
+            Anext = A + (Ynext - A * Xnext) * Vtemp2(end,:) / inv(Snext) * Unext'; % can I use Xnext = Unext * Snext * Vnext'?
+        end
+        
         function [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, X, Y, fs, tp, fX, fY)
             % Get eigenvalues and eigenvectors
             [W,D] = eig(Atilde);
@@ -150,12 +190,12 @@ classdef DMD < handle
         end
         
         function [norms, mags, freqs] = interpModes(obj, lambda, Phi, b)
-            norms = abs(b' .* vecnorm(Phi,2,1));
+            norms = abs(b'.* vecnorm(Phi,2,1)); %  
             mags = abs(lambda);
             freqs = 180 * angle(lambda)/(2 * pi ^ 2);
         end
         
-        function magFreq(obj, norms, mags, freqs)
+        function damFreq(obj, norms, mags, freqs)
             % magnitude vs frequency plot
             norms = norms / max(norms);
             freqRef = 0:(1.1 * max(freqs));
@@ -163,10 +203,10 @@ classdef DMD < handle
             plot(freqRef, ones(size(freqRef)), 'LineStyle','--','Color','k'); 
             hold on; 
             scatter(freqs, mags, 50 * ones(size(freqs)), norms, 'filled', 'Marker','o');
-            ylabel('Mode magnitude [1]', 'Interpreter', 'Latex', 'FontSize', 12);
-            xlabel('Mode Frequency [Ascending Ordinals]', 'Interpreter', 'Latex', 'FontSize', 12);
+            ylabel('Mode Damping Ratio [1]', 'Interpreter', 'Latex', 'FontSize', 12);
+            xlabel('Mode Frequency [Hz]', 'Interpreter', 'Latex', 'FontSize', 12);
             cb = colorbar; colormap(obj.PerfCm); 
-            ylabel(cb,'Mode Norm [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
+            ylabel(cb,'Mode Intensity [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
             ylim([0 1.1 * max(mags)]); xlim([0 1.1 * max(freqs)]);
         end
         
@@ -175,7 +215,7 @@ classdef DMD < handle
             
             % Dominance structure plot
             nDivs = 8;
-            cm = obj.BarCm(round(linspace(1,256,nDivs)), :);
+            cm = obj.BarCm(round(linspace(1,256,nDivs - 1)), :);
 
             dom = zeros(rank, tSize);
             for k = 1:tSize
@@ -199,7 +239,7 @@ classdef DMD < handle
                 ba(i).CData = cm(i,:);
                 ba(i).BarWidth = 1;
             end
-            ylabel('Mode Norm [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
+            ylabel('Mode Intensity [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
             xlabel('Mode Frequency [Ascending Ordinals]', 'Interpreter', 'Latex', 'FontSize', 12);
             
             colormap(cm); cb = colorbar; 
@@ -217,7 +257,7 @@ classdef DMD < handle
             polarscatter(phase(lambda), abs(lambda), 50 * ones(size(freqs)), norms, 'filled');
             thetalim([0 180]); rlim([0 1.1 * max(mags)]);
             cb = colorbar; colormap(obj.PerfCm); 
-            ylabel(cb,'Mode Norm [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
+            ylabel(cb,'Mode Intensity [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
             title('Half Complex Plane', 'Interpreter', 'Latex', 'FontSize', 12);
             hold on; polarplot(freqRef, ones(size(freqRef)), 'k--');
         end
@@ -227,17 +267,18 @@ classdef DMD < handle
             
             figure; 
             yyaxis left;
-            shadedErrorBar(f,pow2db(pxx'),{@mean,@std},'lineProps',{'markerfacecolor','k'});
+            shadedErrorBar(f,pow2db(pxx'),{@mean,@std},'lineProps','-k');
             xlabel('Frequency [Hz]','Interpreter', 'Latex', 'FontSize', 12);
             ylabel('PSD [dB/Hz]','Interpreter', 'Latex', 'FontSize', 12);
             axis tight;
             
             yyaxis right; 
+            % TODO: don't normalize norms in power spectrum
             stem(freqs,norms,'LineWidth', 1.5, 'LineStyle', ':',...
                      'Color', 'red',...
                      'MarkerFaceColor','black',...
                      'MarkerEdgeColor','red', 'MarkerSize', 8);
-            ylabel('Mode Norm [n.u.]','Interpreter', 'Latex', 'FontSize', 12);
+            ylabel('Mode Intensity [n.u.]','Interpreter', 'Latex', 'FontSize', 12);
         end
         
         function [lambdaCum, omegaCum, PhiCum, bCum] = mrFit(obj, X, Y, rank, nLevels, tSize)
@@ -280,17 +321,6 @@ classdef DMD < handle
             end
             
             [lambdaCum, omegaCum, PhiCum, bCum, ~] = cleanModes(obj, lambdaCum, omegaCum, PhiCum, bCum);
-            [norms, mags, freqs] = interpModes(obj, lambdaCum, PhiCum, bCum);
-            
-            [norms, mags, freqs, lambdaCum, omegaCum, PhiCum, bCum] = boxSelection(obj, norms, mags, freqs, ...
-                                                                                    lambdaCum, omegaCum, PhiCum, bCum, ....
-                                                                                    [0, 1], [0.9, 1], [0.8,15]);
-            
-            magFreq(obj, norms, mags, freqs);
-            domStruct(obj, freqs, lambdaCum, PhiCum, bCum, tSize);
-            nyqPlot(obj, norms, freqs, mags, lambdaCum);
-            
-            powSpect(obj, X, freqs, mags, 50);
         end
         
         % TODO: mode selection for EIT and improve mode selection for b
@@ -312,6 +342,42 @@ classdef DMD < handle
             Phi = Phi(:, isSelect);
             b = b(isSelect);
         end
+        
+        function [norms, mags, freqs, lambda, omega, Phi, b] = roiSelection(obj, snrThresh, norms, mags, freqs, lambda, omega, Phi, b, noiseMask, heartMask, lungMask)
+            nModes = length(freqs);
+            
+            energy = zeros(nModes, 3);
+            for m = 1:nModes
+                phi = abs(reshape(real(Phi(:, m)), 32, 32));
+                totalEnergy = sum(phi(:));
+                
+                tmp = phi .* heartMask;
+                energy(m,1) = sum(tmp(:))/totalEnergy;
+                
+                tmp = phi .* lungMask;
+                energy(m,2) = sum(tmp(:))/totalEnergy;
+                
+                tmp = phi .* noiseMask;
+                energy(m,3) = sum(tmp(:))/totalEnergy;
+            end 
+            
+            isSelect = (sum(energy(:,1:2), 2) ./ sum(energy, 2)) > snrThresh;
+            
+            norms = norms(isSelect);
+            mags = mags(isSelect);
+            freqs = freqs(isSelect);
+            
+            lambda = lambda(isSelect);
+            omega = omega(isSelect);
+            Phi = Phi(:, isSelect);
+            b = b(isSelect); 
+        end
+        
+        % TODO: reconstruction error
+        
+        % TODO: harmonical clustering implementation (after box selection)
+        
+        % TODO: sparsity promoting
     end
 end
 
