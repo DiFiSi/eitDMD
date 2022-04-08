@@ -1,0 +1,13 @@
+Peter J. Schmid lecture
+https://www.youtube.com/watch?v=xAYimi7x4Lc
+
+Lecture on DMD by book authors
+Nathan Kutz
+https://www.youtube.com/watch?v=bYfGVQ1Sg98 (theory)
+https://www.youtube.com/watch?v=KAau5TBU0Sc (code)
+
+Steve Brunton
+https://www.youtube.com/watch?v=sQvrK8AGCAo (overview)
+https://www.youtube.com/watch?v=wheHQAhJWco (examples)
+https://www.youtube.com/watch?v=kVbEHH_laNU (code)
+https://www.youtube.com/watch?v=4tLSq_PEFms (compressed sensing DMD)

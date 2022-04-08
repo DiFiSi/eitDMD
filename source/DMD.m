@@ -17,6 +17,7 @@ classdef DMD < handle
             %DMD Construct an instance of this class
         end
         
+        % Compressing data for compressed sensing DMD (according to DMD Book)
         function [cX, cY, C] = compressData(obj, X, Y, m, projType)
             data = [X(:,1),Y];
             n = size(data, 1);
@@ -47,11 +48,14 @@ classdef DMD < handle
             cY = data(:,2:end);
         end
         
+        % Getting Atilde
         function [Ur, Sr, Vr, Atilde] = fitKoopman(obj, X, Y, rank, tSize) % TODO: Faster truncated SVD, Optimal SVD truncation for EIT
             fSize = size(X, 1);
             
+            % Perform SVD
             [U,S,V] = svd(X,'econ');
-
+            
+            % Truncate SVD
             if isempty(rank) || rank <= 0
                 [U,S,V] = svd(X,'econ');
                 beta = tSize / fSize;
@@ -65,7 +69,7 @@ classdef DMD < handle
             Sr = S(1:rank,1:rank);
             Vr = V(:,1:rank);
             
-            % Approximate low-rank Koopman operator
+            % Approximate low-rank Koopman operator (Atilde)
             Atilde = Ur' * Y * Vr / Sr;
         end
         
@@ -75,12 +79,16 @@ classdef DMD < handle
 %             P = V * diag(1/diag(S)) * U';
         end
         
+        % Trying to update Koopman directly (best to update SVD instead)
         function [Anext, Pnext] = updateKoopman(obj, A, P, Xnext, Ynext, w)
             gamma = 1 / (1 + Xnext' * P * Xnext);
             Pnext = (1 / w) * P - gamma * P * (Xnext * Xnext') * P;
             Anext = A + gamma * (Ynext - A * Xnext) * Xnext' * P;
         end
         
+        % Trying the weighted windowed online DMD from arXiv:1908.01047v3
+        % PROBLEM: THIS VERSION DOESN'T ALLOW CACLULATION OF B, WHICH MEANS
+        % THE MODES CAN#T BE RECONSTRUCTED AFTERWARDS - NO GOOD
         function [Anext, Unext, Snext, Vnext] = updateKoopmanSVD(obj, A, X, Y, Xnext, Ynext, U, S, V)
             % We start with UXk, SXk, VXk
             % X´k = Xnew(:,1:end-1);
@@ -109,6 +117,7 @@ classdef DMD < handle
             Anext = A + (Ynext - A * Xnext) * Vtemp2(end,:) / inv(Snext) * Unext'; % can I use Xnext = Unext * Snext * Vnext'?
         end
         
+        % Find Phi, b, and lambda
         function [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, X, Y, fs, tp, fX, fY)
             % Get eigenvalues and eigenvectors
             [W,D] = eig(Atilde);
@@ -123,7 +132,7 @@ classdef DMD < handle
             fSize = size(X, 1);
             rank = length(lambda);
             
-            % Calculate DMD modes and amplitudes (seen in absolute)
+            % Calculate DMD modes and amplitudes (interpreted in absolute)
             switch(tp)
                 case 'exact-mod'
                     tmp = Y * Vr / Sr;
@@ -133,10 +142,12 @@ classdef DMD < handle
                     end
                     b = inv(D) / Phi * X(:,2);
                     
+                % Exact DMD from Peter J. Schmid (https://www.youtube.com/watch?v=xAYimi7x4Lc)
                 case 'exact'
                     Phi = X' * Vr / Sr * W;
                     b = inv(Phi) \ X;
                     
+                % Simple vanilla DMD from DMD Book
                 case 'vanilla'
                     Phi = Ur * W;
                     b = inv(Phi) \ X;
@@ -146,6 +157,7 @@ classdef DMD < handle
             end
         end
         
+        % Reconstruct data from modes
         function [Xcomps, Xfinal] = reconData(obj, lambda, omega, Phi, b, tSize, fs, tp)
             rank = length(lambda);
             fSize = size(Phi, 1);
@@ -155,6 +167,7 @@ classdef DMD < handle
             Xfinal = zeros(fSize, tSize);
             
             switch(tp)
+                % Discrete version
                 case 'disc'
                     % Reconstruct data (discrete)
                     for k = 1:tSize
@@ -165,6 +178,7 @@ classdef DMD < handle
                         end
                     end
                     
+                % Continuous version
                 case 'cont'
                     % Reconstruct data (continuous)
                     for k = 1:tSize
@@ -180,6 +194,7 @@ classdef DMD < handle
             end
         end
         
+        % Remove complex duplicates from modes
         function [lambda, omega, Phi, b, rank] = cleanModes(obj, lambda, omega, Phi, b)
             uniqueIdx = (imag(lambda) >= 0);
             rank = sum(uniqueIdx);
@@ -189,12 +204,15 @@ classdef DMD < handle
             b = b(uniqueIdx);
         end
         
+        % Interpret modes into their norms, magnitudes and frequencies
+        % (according to https://doi.org/10.1016/j.visinf.2021.06.003)
         function [norms, mags, freqs] = interpModes(obj, lambda, Phi, b)
-            norms = abs(b'.* vecnorm(Phi,2,1)); %  
+            norms = abs(b'.* vecnorm(Phi,2,1));
             mags = abs(lambda);
             freqs = 180 * angle(lambda)/(2 * pi ^ 2);
         end
         
+        % Plot half polar plot
         function damFreq(obj, norms, mags, freqs)
             % magnitude vs frequency plot
             norms = norms / max(norms);
@@ -210,6 +228,7 @@ classdef DMD < handle
             ylim([0 1.1 * max(mags)]); xlim([0 1.1 * max(freqs)]);
         end
         
+        % Plot dominance structure (according to https://doi.org/10.1016/j.visinf.2021.06.003)
         function domStruct(obj, freqs, lambda, Phi, b, tSize)
             rank = length(lambda);
             
@@ -248,6 +267,7 @@ classdef DMD < handle
             set(cb, 'Ticks', divs(1:end),'TickLabelInterpreter','latex')
         end
         
+        
         function nyqPlot(obj, norms, freqs, mags, lambda)
             % Nyquist Plot
             norms = norms / max(norms);
@@ -262,6 +282,7 @@ classdef DMD < handle
             hold on; polarplot(freqRef, ones(size(freqRef)), 'k--');
         end
         
+        % Power spectrum of signals against of modes
         function powSpect(obj, X, freqs, norms, fs)
             [pxx,f] = pwelch(X, [], [], [], fs);
             
@@ -281,13 +302,11 @@ classdef DMD < handle
             ylabel('Mode Intensity [n.u.]','Interpreter', 'Latex', 'FontSize', 12);
         end
         
+        % Multi-resolution DMD (according to DMD book)
         function [lambdaCum, omegaCum, PhiCum, bCum] = mrFit(obj, X, Y, rank, nLevels, tSize)
 %             nModes = sum(2 .^ [0:nLevels - 1]) * rank;
 %             fSize = size(X, 1);
             
-            [cX, cY, ~] = compressData(obj, X, Y, 128, 2);
-            
-            % TODO: more efficient mode collection
             lambdaCum = [];
             omegaCum = [];
             PhiCum = [];
@@ -304,15 +323,13 @@ classdef DMD < handle
                     
                     x = X(:, start:finish);
                     y = Y(:, start:finish);
-                    cx = cX(:, start:finish);
-                    cy = cY(:, start:finish);
                     
                     if rank > winLen 
                         rank = winLen;
                     end
                     
-                    [Ur, Sr, Vr, Atilde] = fitKoopman(obj, cx, cy, rank, tSize);
-                    [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, cx, cy, 50, 'exact-mod', x, y);
+                    [Ur, Sr, Vr, Atilde] = fitKoopman(obj, x, y, rank, tSize);
+                    [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, x, y, 50, 'exact-mod');
                     lambdaCum = [lambdaCum; lambda];
                     omegaCum = [omegaCum; omega];
                     PhiCum = [PhiCum, Phi];
@@ -324,6 +341,7 @@ classdef DMD < handle
         end
         
         % TODO: mode selection for EIT and improve mode selection for b
+        % Selection of modes based on frequency, norm and magnitude ranges
         function [norms, mags, freqs, lambda, omega, Phi, b] = boxSelection(obj, norms, mags, freqs, lambda, omega, Phi, b, limsNorms, limsMags, limsFreqs)
             nnorms = norms / max(norms);
             
@@ -343,6 +361,8 @@ classdef DMD < handle
             b = b(isSelect);
         end
         
+        % Selection of modes based on ROI similarity between reconstruction
+        % and singular vectors of data
         function [norms, mags, freqs, lambda, omega, Phi, b] = roiSelection(obj, snrThresh, norms, mags, freqs, lambda, omega, Phi, b, noiseMask, heartMask, lungMask)
             nModes = length(freqs);
             
