@@ -73,50 +73,6 @@ classdef DMD < handle
             Atilde = Ur' * Y * Vr / Sr;
         end
         
-        function P = getP(obj, X)
-            P = pinv(X * X');
-%             [U,S,V] = svd(X * X','econ');
-%             P = V * diag(1/diag(S)) * U';
-        end
-        
-        % Trying to update Koopman directly (best to update SVD instead)
-        function [Anext, Pnext] = updateKoopman(obj, A, P, Xnext, Ynext, w)
-            gamma = 1 / (1 + Xnext' * P * Xnext);
-            Pnext = (1 / w) * P - gamma * P * (Xnext * Xnext') * P;
-            Anext = A + gamma * (Ynext - A * Xnext) * Xnext' * P;
-        end
-        
-        % Trying the weighted windowed online DMD from arXiv:1908.01047v3
-        % PROBLEM: THIS VERSION DOESN'T ALLOW CACLULATION OF B, WHICH MEANS
-        % THE MODES CAN#T BE RECONSTRUCTED AFTERWARDS - NO GOOD
-        function [Anext, Unext, Snext, Vnext] = updateKoopmanSVD(obj, A, X, Y, Xnext, Ynext, U, S, V)
-            % We start with UXk, SXk, VXk
-            % X큝 = Xnew(:,1:end-1);
-            % We can then calculate UX큝, SX큝, VX큝
-            % Xk+1 = Xnew;
-            z = [1, zeros(1, size(V,1) - 1)];
-            
-            % Step window forward
-            Xnew = [X(:,2:end), Xnext];
-            Ynew = [Y(:,2:end), Ynext];
-            
-            temp1 = S - U' * X(:,1) * z * V';
-            [Utemp1,Stemp1,Vtemp1] = svd(temp1,'econ'); % Utemp = Us큝; Stemp = Ss큝; Vtemp = Vs큝; 
-            
-            Upres = U * Utemp1; % Upres = UX큝;
-            Spres = Stemp1; % Spres = SX큝;
-            Vpres = V(:,2:end)' * Vtemp1'; % Vpres = VX큝; %wrong
-            
-            temp2 = [Spres, Upres' * Xnew];
-            [Utemp2, Stemp2, Vtemp2] = svd(temp2, 'econ');
-            
-            Unext = Upres * Utemp2;
-            Snext = Stemp2;
-            Vnext = [Vpres' * Vtemp2(:,1:end-1)'; Vtemp2(:,end)']; % wrong
-            
-            Anext = A + (Ynext - A * Xnext) * Vtemp2(end,:) / inv(Snext) * Unext'; % can I use Xnext = Unext * Snext * Vnext'?
-        end
-        
         % Find Phi, b, and lambda
         function [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, X, Y, fs, tp, fX, fY)
             % Get eigenvalues and eigenvectors
@@ -206,10 +162,10 @@ classdef DMD < handle
         
         % Interpret modes into their norms, magnitudes and frequencies
         % (according to https://doi.org/10.1016/j.visinf.2021.06.003)
-        function [norms, mags, freqs] = interpModes(obj, lambda, Phi, b)
+        function [norms, mags, freqs] = interpModes(obj, lambda, omega, Phi, b)
             norms = abs(b'.* vecnorm(Phi,2,1));
             mags = abs(lambda);
-            freqs = 180 * angle(lambda)/(2 * pi ^ 2);
+            freqs = abs(imag(omega/2/pi));
         end
         
         % Plot half polar plot
@@ -283,27 +239,49 @@ classdef DMD < handle
         end
         
         % Power spectrum of signals against of modes
-        function powSpect(obj, X, freqs, norms, fs)
+        function powSpect(obj, X, freqs, norms, mags, fs)
             [pxx,f] = pwelch(X, [], [], [], fs);
             
             figure; 
+%             yyaxis left;
+%             shadedErrorBar(f,pow2db(pxx'),{@mean,@std},'lineProps','-k');
+%             xlabel('Frequency [Hz]','Interpreter', 'Latex', 'FontSize', 12);
+%             ylabel('PSD [dB/Hz]','Interpreter', 'Latex', 'FontSize', 12);
+%             axis tight;
+%             
+%             yyaxis right; 
+%             % TODO: don't normalize norms in power spectrum
+%             stem(freqs,norms,'LineWidth', 1.5, 'LineStyle', ':',...
+%                      'Color', 'red',...
+%                      'MarkerFaceColor','black',...
+%                      'MarkerEdgeColor','red', 'MarkerSize', 8);
+%             ylabel('Mode Intensity [n.u.]','Interpreter', 'Latex', 'FontSize', 12);
+            colormap(obj.PerfCm); cb = colorbar;  caxis([0.8,1.1]);
+            cb.Label.String = 'Damping/Magnitude [a.u.]';
+            cb.Label.FontName = 'Arial';
+            cb.Label.FontSize = 9;
+            
             yyaxis left;
             shadedErrorBar(f,pow2db(pxx'),{@mean,@std},'lineProps','-k');
             xlabel('Frequency [Hz]','Interpreter', 'Latex', 'FontSize', 12);
-            ylabel('PSD [dB/Hz]','Interpreter', 'Latex', 'FontSize', 12);
+            ylabel('PSD [dB]', 'FontName', 'Arial', 'FontSize', 9);
             axis tight;
-            
-            yyaxis right; 
-            % TODO: don't normalize norms in power spectrum
-            stem(freqs,norms,'LineWidth', 1.5, 'LineStyle', ':',...
-                     'Color', 'red',...
-                     'MarkerFaceColor','black',...
-                     'MarkerEdgeColor','red', 'MarkerSize', 8);
-            ylabel('Mode Intensity [n.u.]','Interpreter', 'Latex', 'FontSize', 12);
+            grid on;
+
+            yyaxis right;
+            stem(freqs,db(norms),'LineWidth', 1.5, 'LineStyle', '-',...
+                     'Color', 'black',...
+                     'MarkerFaceColor','black');
+            hold on;
+            scatter(freqs, db(norms), 50 * ones(size(freqs)), mags, 'filled', 'Marker','o',...
+                'MarkerEdgeColor','black', "LineWidth",1);
+            ylabel('Magnitude [dB]', 'FontName', 'Arial', 'FontSize', 9);
+            xlabel('Frequency [Hz]', 'FontName', 'Arial', 'FontSize', 9);
+            grid on;
         end
         
         % Multi-resolution DMD (according to DMD book)
-        function [lambdaCum, omegaCum, PhiCum, bCum] = mrFit(obj, X, Y, rank, nLevels, tSize)
+        function [lambdaCum, omegaCum, PhiCum, bCum] = mrFit(obj, X, Y, rank, nLevels, tSize, fX, fY)
 %             nModes = sum(2 .^ [0:nLevels - 1]) * rank;
 %             fSize = size(X, 1);
             
@@ -324,12 +302,23 @@ classdef DMD < handle
                     x = X(:, start:finish);
                     y = Y(:, start:finish);
                     
+                    if nargin > 6
+                        fx = fX(:, start:finish);
+                        fy = fY(:, start:finish);
+                    end
+                    
                     if rank > winLen 
                         rank = winLen;
                     end
                     
                     [Ur, Sr, Vr, Atilde] = fitKoopman(obj, x, y, rank, tSize);
-                    [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, x, y, 50, 'exact-mod');
+                    
+                    if nargin > 6
+                        [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, x, y, 50, 'exact-mod', fx, fy);
+                    else
+                        [lambda, omega, Phi, b] = fitModes(obj, Ur, Sr, Vr, Atilde, x, y, 50, 'exact-mod');
+                    end
+                    
                     lambdaCum = [lambdaCum; lambda];
                     omegaCum = [omegaCum; omega];
                     PhiCum = [PhiCum, Phi];
@@ -398,6 +387,51 @@ classdef DMD < handle
         % TODO: harmonical clustering implementation (after box selection)
         
         % TODO: sparsity promoting
+        
+        % UNDER CONSTRUCTION
+%         function P = getP(obj, X)
+%             P = pinv(X * X');
+% %             [U,S,V] = svd(X * X','econ');
+% %             P = V * diag(1/diag(S)) * U';
+%         end
+%         
+%         % Trying to update Koopman directly (best to update SVD instead)
+%         function [Anext, Pnext] = updateKoopman(obj, A, P, Xnext, Ynext, w)
+%             gamma = 1 / (1 + Xnext' * P * Xnext);
+%             Pnext = (1 / w) * P - gamma * P * (Xnext * Xnext') * P;
+%             Anext = A + gamma * (Ynext - A * Xnext) * Xnext' * P;
+%         end
+%         
+%         % Trying the weighted windowed online DMD from arXiv:1908.01047v3
+%         % PROBLEM: THIS VERSION DOESN'T ALLOW CACLULATION OF B, WHICH MEANS
+%         % THE MODES CAN#T BE RECONSTRUCTED AFTERWARDS - NO GOOD
+%         function [Anext, Unext, Snext, Vnext] = updateKoopmanSVD(obj, A, X, Y, Xnext, Ynext, U, S, V)
+%             % We start with UXk, SXk, VXk
+%             % X큝 = Xnew(:,1:end-1);
+%             % We can then calculate UX큝, SX큝, VX큝
+%             % Xk+1 = Xnew;
+%             z = [1, zeros(1, size(V,1) - 1)];
+%             
+%             % Step window forward
+%             Xnew = [X(:,2:end), Xnext];
+%             Ynew = [Y(:,2:end), Ynext];
+%             
+%             temp1 = S - U' * X(:,1) * z * V';
+%             [Utemp1,Stemp1,Vtemp1] = svd(temp1,'econ'); % Utemp = Us큝; Stemp = Ss큝; Vtemp = Vs큝; 
+%             
+%             Upres = U * Utemp1; % Upres = UX큝;
+%             Spres = Stemp1; % Spres = SX큝;
+%             Vpres = V(:,2:end)' * Vtemp1'; % Vpres = VX큝; %wrong
+%             
+%             temp2 = [Spres, Upres' * Xnew];
+%             [Utemp2, Stemp2, Vtemp2] = svd(temp2, 'econ');
+%             
+%             Unext = Upres * Utemp2;
+%             Snext = Stemp2;
+%             Vnext = [Vpres' * Vtemp2(:,1:end-1)'; Vtemp2(:,end)']; % wrong
+%             
+%             Anext = A + (Ynext - A * Xnext) * Vtemp2(end,:) / inv(Snext) * Unext'; % can I use Xnext = Unext * Snext * Vnext'?
+%         end
     end
 end
 
