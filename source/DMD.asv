@@ -13,8 +13,6 @@ classdef DMD < handle
     end
     
     properties(Access = public)
-       Rank
-        
        Ux
        Sx
        Vx
@@ -92,18 +90,18 @@ classdef DMD < handle
         end
         
         % Getting Atilde
-        function fitKoopman(obj, X, Y, rank, tSize, tp) % TODO: Faster truncated SVD, Optimal SVD truncation for EIT
+        function fitKoopman(obj, X, Y, rank, tp) % TODO: Faster truncated SVD, Optimal SVD truncation for EIT
             if ~exist('tp','var')
                tp = 'standard'; 
             end
             
-            [obj.Ux,obj.Sx,obj.Vx,obj.Rank] = truncSVD(X,rank,tSize);
+            [obj.Ux,obj.Sx,obj.Vx,obj.Rank] = truncSVD(X,rank);
             
             switch(tp)
                 case 'stream'
                     Xtilde = obj.Ux' * X;
                     
-                    [obj.Uy,obj.Sy,obj.Vy] = truncSVD(Y,obj.Rank,tSize);
+                    [obj.Uy,obj.Sy,obj.Vy] = truncSVD(Y,obj.rank);
                     Ytilde = obj.Uy' * Y;
                     
                     obj.Atilde = Ytilde \ Xtilde;
@@ -114,7 +112,7 @@ classdef DMD < handle
                 case 'fb'
                     forwAtilde = obj.Ux' * Y * obj.Vx / obj.Sx;
 
-                    [obj.Uy,obj.Sy,obj.Vy] = truncSVD(Y,obj.Rank,tSize);
+                    [obj.Uy,obj.Sy,obj.Vy] = truncSVD(Y,obj.rank);
                     backAtilde = obj.Uy' * X * obj.Vy / obj.Sy;
 
                     obj.Atilde = (forwAtilde + inv(backAtilde)) ^ 0.5;
@@ -206,14 +204,14 @@ classdef DMD < handle
             end
             
             fSize = size(X, 1);
-%             obj.Rank = length(obj.lambda);
+            obj.Rank = length(obj.lambda);
             
             % Calculate DMD modes and amplitudes (interpreted in absolute)
             switch(tp)
                 case 'exact-mod'
                     tmp = Y * obj.Vx / obj.Sx;
                     obj.Phi = zeros(fSize, obj.Rank);
-                    for i = 1:obj.Rank
+                    for i = 1:obj.rank
                         obj.Phi(:,i) = 1/obj.lambda(i) * tmp * W(:,i);
                     end
                     obj.b = inv(D) / obj.Phi * X(:,2);
@@ -239,11 +237,11 @@ classdef DMD < handle
         
         % Reconstruct data from modes
         function [Xcomps, Xfinal] = reconData(obj, tSize, fs, tp)
-%             rank = length(obj.lambda);
+            rank = length(obj.lambda);
             fSize = size(obj.Phi, 1);
             t = (0:tSize - 1) * (1 / fs);
             
-            Xcomps = cell(obj.Rank,1);
+            Xcomps = cell(rank,1);
             Xfinal = zeros(fSize, tSize);
             
             switch(tp)
@@ -251,7 +249,7 @@ classdef DMD < handle
                 case 'disc'
                     % Reconstruct data (discrete)
                     for k = 1:tSize
-                        for j = 1:obj.Rank
+                        for j = 1:rank
                             tmp = obj.lambda(j)^(k-1) * obj.b(j) * obj.Phi(:,j);
                             Xcomps{j}(:,k) = tmp;
                             Xfinal(:,k) = Xfinal(:,k) + tmp;
@@ -262,7 +260,7 @@ classdef DMD < handle
                 case 'cont'
                     % Reconstruct data (continuous)
                     for k = 1:tSize
-                        for j = 1:obj.Rank
+                        for j = 1:rank
                             tmp = obj.Phi(:,j) * obj.b(j) * exp(obj.omega(j) * t(k));
                             Xcomps{j}(:,k) = tmp;
                             Xfinal(:,k) = Xfinal(:,k) + tmp;
@@ -279,9 +277,9 @@ classdef DMD < handle
 %         end
         
         % Remove complex duplicates from modes
-        function cleanModes(obj)
+        function rank = cleanModes(obj)
             uniqueIdx = (imag(obj.lambda) >= 0);
-            obj.Rank = sum(uniqueIdx);
+            rank = sum(uniqueIdx);
             obj.lambda = obj.lambda(uniqueIdx);
             obj.omega = obj.omega(uniqueIdx);
             obj.Phi = obj.Phi(:, uniqueIdx);
@@ -317,22 +315,22 @@ classdef DMD < handle
         
         % Plot dominance structure (according to https://doi.org/10.1016/j.visinf.2021.06.003)
         function domStruct(obj, tSize)
-%             rank = length(obj.lambda);
+            rank = length(obj.lambda);
             
             % Dominance structure plot
             nDivs = 8;
             cm = obj.BarCm(round(linspace(1,256,nDivs - 1)), :);
 
-            dom = zeros(obj.Rank, tSize);
+            dom = zeros(rank, tSize);
             for k = 1:tSize
-                for j = 1:obj.Rank
+                for j = 1:rank
                     dom(j,k) = norm(obj.lambda(j) ^ (k - 1) * obj.b(j) * obj.Phi(:,j));
                 end
             end
             
             divs = round(linspace(1, tSize, nDivs));
-            finalDom = zeros(obj.Rank, nDivs);
-            for j = 1:obj.Rank
+            finalDom = zeros(rank, nDivs);
+            for j = 1:rank
                 for i = 1:nDivs - 1
                     finalDom(j, i) = sum(dom(j, divs(i):divs(i + 1)), 2) ./ (divs(i + 1) - divs(i));
                 end
@@ -362,10 +360,8 @@ classdef DMD < handle
             norms = obj.Norms / max(obj.Norms);
             freqRef = 0:0.1:pi;
 
-            figure;
-            
+            figure; 
             polarscatter(phase(obj.lambda), abs(obj.lambda), 50 * ones(size(obj.Freqs)), norms, 'filled');
-            
             thetalim([0 180]); rlim([0 1.1 * max(obj.Mags)]);
             cb = colorbar; colormap(obj.PerfCm); 
             ylabel(cb,'Mode Intensity [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
@@ -454,7 +450,7 @@ classdef DMD < handle
         % TODO: mode selection for EIT and improve mode selection for b
         % Selection of modes based on frequency, norm and magnitude ranges
         function boxSelection(obj, limsNorms, limsMags, limsFreqs)
-            nnorms = obj.Norms / max(obj.Norms);
+            nnorms = obj.bNorms / max(obj.bNorms);
             
             isNorms = nnorms >= limsNorms(1) & nnorms <= limsNorms(2);
             isMags = obj.Mags >= limsMags(1) & obj.Mags <= limsMags(2);
