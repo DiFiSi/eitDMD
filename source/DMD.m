@@ -106,10 +106,11 @@ classdef DMD < handle
                     [obj.Uy,obj.Sy,obj.Vy] = truncSVD(Y,obj.Rank,tSize);
                     Ytilde = obj.Uy' * Y;
                     
-                    obj.Atilde = Ytilde \ Xtilde;
                     obj.Q = Ytilde * Xtilde';
                     obj.Pinvx = Xtilde * Xtilde';
                     obj.Pinvy = Ytilde * Ytilde';
+                    
+                    obj.Atilde = obj.Ux' * obj.Uy * obj.Q / obj.Pinvx;
                     
                 case 'fb'
                     forwAtilde = obj.Ux' * Y * obj.Vx / obj.Sx;
@@ -117,7 +118,17 @@ classdef DMD < handle
                     [obj.Uy,obj.Sy,obj.Vy] = truncSVD(Y,obj.Rank,tSize);
                     backAtilde = obj.Uy' * X * obj.Vy / obj.Sy;
 
-                    obj.Atilde = (forwAtilde + inv(backAtilde)) ^ 0.5;
+                    obj.Atilde = (forwAtilde / backAtilde) ^ 0.5;
+                    
+                case 'tls'
+                    Z = [X;Y];
+                    
+                    [Uz, ~, ~] = svd(Z, 'econ');
+
+                    U11 = Uz(1:obj.Rank, 1:obj.Rank);
+                    U21 = Uz(obj.Rank + 1:end, 1:obj.Rank);
+                    
+                    obj.Atilde = U21 / U11;
                     
                 case 'standard'
                     obj.Atilde = obj.Ux' * Y * obj.Vx / obj.Sx;
@@ -189,7 +200,7 @@ classdef DMD < handle
             obj.Q = rho * obj.Q + ytilde * xtilde';
             obj.Pinvx = rho * obj.Pinvx + xtilde * xtilde';
             obj.Pinvy = rho * obj.Pinvy + ytilde * ytilde';
-            obj.Atilde = obj.Q \ obj.Pinvx;
+            obj.Atilde = obj.Ux' * obj.Uy * obj.Q / obj.Pinvx;
         end
         
         % Find Phi, b, and lambda
