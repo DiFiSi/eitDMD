@@ -12,6 +12,12 @@ classdef DMD < handle
        BarCm = buildcmap('bwr');
     end
     
+    properties(Constant)
+       ProjErrThresh = 0.5;
+       Rmin = 30;
+       Rmax = 150;
+    end
+    
     properties(Access = public)
        Rank
         
@@ -22,10 +28,6 @@ classdef DMD < handle
        Uy
        Sy
        Vy
-       
-       ProjErrThresh
-       Rmax
-       Rmin
       
        Pinvx
        Pinvy
@@ -78,16 +80,20 @@ classdef DMD < handle
         end
         
         function Xout = hankelTransform(obj, X, maxDelay)
-            [nStates,nSnaps] = size(X);
-            Xout = zeros(nStates * maxDelay, nSnaps - maxDelay);
-            for i = 0:maxDelay - 1
-                startRow = nStates * i + 1;
-                finishRow = nStates * (i + 1);
-                
-                startCol = 1 + i;
-                finishCol = nSnaps - (maxDelay - i);
-                
-                Xout(startRow:finishRow,:) = X(:,startCol:finishCol);
+            if maxDelay == 0
+                Xout = X;
+            else
+                [nStates,nSnaps] = size(X);
+                Xout = zeros(nStates * maxDelay, nSnaps - maxDelay);
+                for i = 0:maxDelay - 1
+                    startRow = nStates * i + 1;
+                    finishRow = nStates * (i + 1);
+
+                    startCol = 1 + i;
+                    finishCol = nSnaps - (maxDelay - i);
+
+                    Xout(startRow:finishRow,:) = X(:,startCol:finishCol);
+                end
             end
         end
         
@@ -175,18 +181,17 @@ classdef DMD < handle
             if size(obj.Ux,1) > obj.Rmax
                [eigVecs,eigVals] = eig(obj.Pinvx,'vector'); 
                [eigVals,idx] = sort(eigVals,'descend');
-               qx = eigVecs(:,idx(1:rmin));
+               qx = eigVecs(:,idx(1:obj.Rmin));
                
                obj.Ux = obj.Ux * qx;
                obj.Q = obj.Q * qx;
                obj.Pinvx = diag(eigVals(1:obj.Rmin));
             end
             
-            % Reduce rank of Ux and Uy if current rank high
             if size(obj.Uy,1) > obj.Rmax
                [eigVecs,eigVals] = eig(obj.Pinvy,'vector'); 
                [eigVals,idx] = sort(eigVals,'descend');
-               qy = eigVecs(:,idx(1:rmin));
+               qy = eigVecs(:,idx(1:obj.Rmin));
                
                obj.Uy = obj.Uy * qy;
                obj.Q = qy' * obj.Q;
@@ -217,7 +222,7 @@ classdef DMD < handle
             end
             
             fSize = size(X, 1);
-%             obj.Rank = length(obj.lambda);
+            obj.Rank = length(obj.lambda);
             
             % Calculate DMD modes and amplitudes (interpreted in absolute)
             switch(tp)
@@ -249,40 +254,63 @@ classdef DMD < handle
         end
         
         % Reconstruct data from modes
-        function [Xcomps, Xfinal] = reconData(obj, tSize, fs, tp)
+        function [Xcomps, Xfinal] = reconData(obj, X, tp)
+            if ~exist('tp','var')
+               tp = 'standard';
+            end
 %             rank = length(obj.lambda);
             fSize = size(obj.Phi, 1);
-            t = (0:tSize - 1) * (1 / fs);
+%             t = (0:tSize - 1) * (1 / fs);
             
+            nPred = 1:size(X,2);
+            nSnaps = length(nPred);
             Xcomps = cell(obj.Rank,1);
-            Xfinal = zeros(fSize, tSize);
+            Xfinal = zeros(fSize, nSnaps);
             
             switch(tp)
-                % Discrete version
-                case 'disc'
+                case 'standard'
                     % Reconstruct data (discrete)
-                    for k = 1:tSize
+                    for k = 1:nSnaps
+                        n = nPred(k);
                         for j = 1:obj.Rank
-                            tmp = obj.lambda(j)^(k-1) * obj.b(j) * obj.Phi(:,j);
+                            tmp = obj.lambda(j)^(n-1) * obj.b(j) * obj.Phi(:,j);
                             Xcomps{j}(:,k) = tmp;
                             Xfinal(:,k) = Xfinal(:,k) + tmp;
                         end
                     end
                     
-                % Continuous version
-                case 'cont'
-                    % Reconstruct data (continuous)
-                    for k = 1:tSize
-                        for j = 1:obj.Rank
-                            tmp = obj.Phi(:,j) * obj.b(j) * exp(obj.omega(j) * t(k));
-                            Xcomps{j}(:,k) = tmp;
-                            Xfinal(:,k) = Xfinal(:,k) + tmp;
-                        end
-                    end
-                    
-                otherwise
-                    error('Invalid reconstruction type.');
+                case 'stream'
+                    Xfinal = obj.Uy * obj.Atilde * obj.Ux' * X;
+                    Xcomps = Xfinal;
             end
+            
+%             switch(tp)
+%                 % Discrete version
+%                 
+%                 case 'disc'
+%                     % Reconstruct data (discrete)
+%                     for k = 1:tSize
+%                         for j = 1:obj.Rank
+%                             tmp = obj.lambda(j)^(k-1) * obj.b(j) * obj.Phi(:,j);
+%                             Xcomps{j}(:,k) = tmp;
+%                             Xfinal(:,k) = Xfinal(:,k) + tmp;
+%                         end
+%                     end
+%                     
+%                 % Continuous version
+%                 case 'cont'
+%                     % Reconstruct data (continuous)
+%                     for k = 1:tSize
+%                         for j = 1:obj.Rank
+%                             tmp = obj.Phi(:,j) * obj.b(j) * exp(obj.omega(j) * t(k));
+%                             Xcomps{j}(:,k) = tmp;
+%                             Xfinal(:,k) = Xfinal(:,k) + tmp;
+%                         end
+%                     end
+%                     
+%                 otherwise
+%                     error('Invalid reconstruction type.');
+%             end
         end
         
 %         function error = reconError(obj, Xfinal, X)
