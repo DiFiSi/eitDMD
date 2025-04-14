@@ -20,6 +20,9 @@ classdef DMD < handle
     
     properties(Access = public)
        Rank
+       RankRed
+       
+       ModeIdx
         
        Ux
        Sx
@@ -34,6 +37,7 @@ classdef DMD < handle
        Q
        
        Atilde
+       
        lambda
        omega
        Phi
@@ -41,6 +45,14 @@ classdef DMD < handle
        Norms
        Mags
        Freqs
+       
+       lambdaRed
+       omegaRed
+       PhiRed
+       bRed
+       NormsRed
+       MagsRed
+       FreqsRed
     end
     
     methods
@@ -79,20 +91,36 @@ classdef DMD < handle
             cY = data(:,2:end);
         end
         
-        function Xout = hankelTransform(obj, X, maxDelay)
-            if maxDelay == 0
+        function Xout = hankelTransform(obj, X, nWin, nDel)
+            if nDel == 0
                 Xout = X;
             else
-                [nStates,nSnaps] = size(X);
-                Xout = zeros(nStates * maxDelay, nSnaps - maxDelay);
-                for i = 0:maxDelay - 1
-                    startRow = nStates * i + 1;
-                    finishRow = nStates * (i + 1);
+%                 [nStates,nSnaps] = size(X);
+%                 Xout = zeros(nStates * maxDelay, nSnaps - maxDelay);
+%                 for i = 0:maxDelay - 1
+%                     startRow = nStates * i + 1;
+%                     finishRow = nStates * (i + 1);
+% 
+%                     startCol = 1 + i;
+%                     finishCol = nSnaps - (maxDelay - i);
+% 
+%                     Xout(startRow:finishRow,:) = X(:,startCol:finishCol);
+%                 end
+                nStates = size(X,1);
+                nRows = (nDel + 1) * nStates;
+                nCols = nWin;
 
-                    startCol = 1 + i;
-                    finishCol = nSnaps - (maxDelay - i);
+                Xout = zeros(nRows,nCols);
+                for col = 1:nCols
+                    count = col - 1;
+                    for row = 1:nDel + 1
+                        startState = nStates * (row - 1) + 1; 
+                        endState = startState + nStates - 1;
 
-                    Xout(startRow:finishRow,:) = X(:,startCol:finishCol);
+                        Xout(startState:endState,end - col + 1) = X(:,size(X,2) - count);
+
+                        count = count + 1;
+                    end
                 end
             end
         end
@@ -253,6 +281,28 @@ classdef DMD < handle
             end
         end
         
+        function identComps(obj, fComps)
+            tol = 0.25;
+            
+            nComps = length(fComps);
+            obj.ModeIdx = false(obj.Rank,nComps);
+            for c = 1:nComps
+                fC = fComps{c};
+                for i = 1:length(fC)
+                    freqRef = fC(i);
+                    freqRange = [freqRef - tol, freqRef + tol];
+                    for j = 1:obj.Rank
+                        freqMode = obj.Freqs(j);
+                        if freqMode > freqRange(1) && freqMode < freqRange(2) && ~any(obj.ModeIdx(j,:))
+                            obj.ModeIdx(j,c) = true;
+                        end
+                    end
+                end
+            end
+            
+            obj.ModeIdx = flipud(obj.ModeIdx);
+        end
+        
         % Reconstruct data from modes
         function [Xcomps, Xfinal] = reconData(obj, X, tp)
             if ~exist('tp','var')
@@ -264,7 +314,6 @@ classdef DMD < handle
             
             nPred = 1:size(X,2);
             nSnaps = length(nPred);
-            Xcomps = cell(obj.Rank,1);
             Xfinal = zeros(fSize, nSnaps);
             
             switch(tp)
@@ -281,7 +330,17 @@ classdef DMD < handle
                     
                 case 'stream'
                     Xfinal = obj.Uy * obj.Atilde * obj.Ux' * X;
-                    Xcomps = Xfinal;
+                    
+                    if ~isempty(obj.ModeIdx)
+                        nComps = size(obj.ModeIdx,2);
+                        Xcomps = cell(nComps,1);
+                        for c = 1:nComps
+                           idx = obj.ModeIdx(:,c);
+                           Xcomps{c} = obj.Uy(:,idx) * obj.Atilde(idx,idx) * obj.Ux(:,idx)' * X; 
+                        end
+                    else
+                       Xcomps = Xfinal; 
+                    end
             end
             
 %             switch(tp)
@@ -320,38 +379,48 @@ classdef DMD < handle
         % Remove complex duplicates from modes
         function cleanModes(obj)
             uniqueIdx = (imag(obj.lambda) >= 0);
-            obj.Rank = sum(uniqueIdx);
-            obj.lambda = obj.lambda(uniqueIdx);
-            obj.omega = obj.omega(uniqueIdx);
-            obj.Phi = obj.Phi(:, uniqueIdx);
-            obj.b = obj.b(uniqueIdx);
+            obj.RankRed = sum(uniqueIdx);
+            obj.lambdaRed = obj.lambda(uniqueIdx);
+            obj.omegaRed = obj.omega(uniqueIdx);
+            obj.PhiRed = obj.Phi(:, uniqueIdx);
+            obj.bRed = obj.b(uniqueIdx);
         end
         
         % Interpret modes into their norms, magnitudes and frequencies
         % (according to https://doi.org/10.1016/j.visinf.2021.06.003)
-        function interpModes(obj)
+        function interpModes(obj,doRed)
+            if ~exist('doRed','var')
+                doRed = false;
+            end
+            
             obj.Norms = abs(obj.b'.* vecnorm(obj.Phi,2,1));
             obj.Mags = abs(obj.lambda);
             obj.Freqs = abs(imag(obj.omega/2/pi));
+
+            if doRed
+                obj.NormsRed = abs(obj.bRed'.* vecnorm(obj.PhiRed,2,1));
+                obj.MagsRed = abs(obj.lambdaRed);
+                obj.FreqsRed = abs(imag(obj.omegaRed/2/pi));
+            end
         end
         
         % Plot half polar plot
         function damFreq(obj)
             % magnitude vs frequency plot
-            obj.Norms = obj.Norms / max(obj.Norms);
-            freqRef = 0:(1.1 * max(obj.Freqs));
+            norms = obj.NormsRed / max(obj.NormsRed);
+            freqRef = 0:(1.1 * max(obj.FreqsRed));
             
             figure; 
             
             plot(freqRef, ones(size(freqRef)), 'LineStyle','--','Color','k'); 
             hold on; 
-            scatter(obj.Freqs, obj.Mags, 50 * ones(size(obj.Freqs)), obj.Norms, 'filled', 'Marker','o');
+            scatter(obj.FreqsRed, obj.MagsRed, 50 * ones(size(obj.Freqs)), norms, 'filled', 'Marker','o');
             
             ylabel('Mode Damping Ratio [1]', 'Interpreter', 'Latex', 'FontSize', 12);
             xlabel('Mode Frequency [Hz]', 'Interpreter', 'Latex', 'FontSize', 12);
             cb = colorbar; colormap(obj.PerfCm); 
             ylabel(cb,'Mode Intensity [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
-            ylim([0 1.1 * max(obj.Mags)]); xlim([0 1.1 * max(obj.Freqs)]);
+            ylim([0 1.1 * max(obj.MagsRed)]); xlim([0 1.1 * max(obj.FreqsRed)]);
         end
         
         % Plot dominance structure (according to https://doi.org/10.1016/j.visinf.2021.06.003)
@@ -362,22 +431,22 @@ classdef DMD < handle
             nDivs = 8;
             cm = obj.BarCm(round(linspace(1,256,nDivs - 1)), :);
 
-            dom = zeros(obj.Rank, tSize);
+            dom = zeros(obj.RankRed, tSize);
             for k = 1:tSize
-                for j = 1:obj.Rank
-                    dom(j,k) = norm(obj.lambda(j) ^ (k - 1) * obj.b(j) * obj.Phi(:,j));
+                for j = 1:obj.RankRed
+                    dom(j,k) = norm(obj.lambdaRed(j) ^ (k - 1) * obj.bRed(j) * obj.PhiRed(:,j));
                 end
             end
             
             divs = round(linspace(1, tSize, nDivs));
-            finalDom = zeros(obj.Rank, nDivs);
-            for j = 1:obj.Rank
+            finalDom = zeros(obj.RankRed, nDivs);
+            for j = 1:obj.RankRed
                 for i = 1:nDivs - 1
                     finalDom(j, i) = sum(dom(j, divs(i):divs(i + 1)), 2) ./ (divs(i + 1) - divs(i));
                 end
             end
 
-            [~, idx] = sort(obj.Freqs);
+            [~, idx] = sort(obj.FreqsRed);
             
             figure; 
             
@@ -398,14 +467,14 @@ classdef DMD < handle
         
         function nyqPlot(obj)
             % Nyquist Plot
-            norms = obj.Norms / max(obj.Norms);
+            norms = obj.NormsRed / max(obj.NormsRed);
             freqRef = 0:0.1:pi;
 
             figure;
             
-            polarscatter(phase(obj.lambda), abs(obj.lambda), 50 * ones(size(obj.Freqs)), norms, 'filled');
+            polarscatter(phase(obj.lambdaRed), abs(obj.lambdaRed), 50 * ones(size(obj.FreqsRed)), norms, 'filled');
             
-            thetalim([0 180]); rlim([0 1.1 * max(obj.Mags)]);
+            thetalim([0 180]); rlim([0 1.1 * max(obj.MagsRed)]);
             cb = colorbar; colormap(obj.PerfCm); 
             ylabel(cb,'Mode Intensity [n.u.]', 'Interpreter', 'Latex', 'FontSize', 12);
             title('Half Complex Plane', 'Interpreter', 'Latex', 'FontSize', 12);
@@ -429,11 +498,11 @@ classdef DMD < handle
             xlim([0,10]);
 
             yyaxis right;
-            stem(obj.Freqs,db(obj.Norms),'LineWidth', 1.5, 'LineStyle', '-',...
+            stem(obj.FreqsRed,db(obj.NormsRed),'LineWidth', 1.5, 'LineStyle', '-',...
                      'Color', 'black',...
                      'MarkerFaceColor','black');
             hold on;
-            scatter(obj.Freqs, db(obj.Norms), 50 * ones(size(obj.Freqs)), obj.Mags, 'filled', 'Marker','o',...
+            scatter(obj.FreqsRed, db(obj.NormsRed), 50 * ones(size(obj.FreqsRed)), obj.MagsRed, 'filled', 'Marker','o',...
                 'MarkerEdgeColor','black', "LineWidth",1);
             ylabel('Magnitude [dB]', 'FontName', 'Arial', 'FontSize', 9);
             xlabel('Frequency [Hz]', 'FontName', 'Arial', 'FontSize', 9);
